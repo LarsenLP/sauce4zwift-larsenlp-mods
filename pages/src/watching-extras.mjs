@@ -1,6 +1,5 @@
 import * as sauce from '/shared/sauce/index.mjs';
 import * as common from '/pages/src/common.mjs';
-import * as color from '/pages/src/color.mjs';
 
 common.settingsStore.setDefault({
     lockedFields: false,
@@ -13,12 +12,8 @@ common.settingsStore.setDefault({
 const doc = document.documentElement;
 const L = sauce.locale;
 const H = L.human;
-const defaultLineChartLen = Math.ceil(window.innerWidth / 2);
-const chartRefs = new Set();
 let imperial = !!common.settingsStore.get('/imperialUnits');
 L.setImperial(imperial);
-let sport = 'cycling';
-let powerZones;
 
 const sectionSpecs = {
     'large-data-fields': {
@@ -40,28 +35,6 @@ const sectionSpecs = {
         title: 'Single Data Field',
         baseType: 'single-data-field',
         groups: 1,
-    },
-    'line-chart': {
-        title: 'Line Chart',
-        baseType: 'chart',
-        alwaysRender: true,
-        defaultSettings: {
-            powerEn: true,
-            hrEn: true,
-            speedEn: true,
-            cadenceEn: false,
-            draft: false,
-            wbalEn: false,
-            markMax: 'power',
-        },
-    },
-    'time-in-zones': {
-        title: 'Time in Zones',
-        baseType: 'time-in-zones',
-        defaultSettings: {
-            style: 'vert-bars',
-            type: 'power',
-        },
     },
 };
 
@@ -96,27 +69,6 @@ const groupSpecs = {
     },
 };
 
-const lineChartFields = [{
-    id: 'power',
-    name: 'Power',
-    color: '#46f',
-    domain: [0, 700],
-    rangeAlpha: [0.4, 1],
-    points: [],
-    get: x => x.state.power || 0,
-    fmt: x => H.power(x, {seperator: ' ', suffix: true}),
-}, {
-    id: 'energy',
-    name: 'Energy',
-    color: '#4ee',
-    domain: [0, 22000],
-    rangeAlpha: [0.1, 0.8],
-    points: [],
-    get: x => x.state.kj ?? 0,
-    fmt: x => H.number(x / 1000 / 4.184) + ' kcal',
-    markMin: true,
-}];
-
 
 async function getTpl(name) {
     return await sauce.template.getTemplate(`templates/${name}.html.tpl`);
@@ -134,14 +86,6 @@ function humanWkg(v, athlete) {
 }
 
 
-function fmtDur(v, options) {
-    if (v == null || v === Infinity || v === -Infinity || isNaN(v)) {
-        return '-';
-    }
-    return H.timer(v, options);
-}
-
-
 const _events = new Map();
 function getEventSubgroup(id) {
     if (!_events.has(id)) {
@@ -156,323 +100,6 @@ function getEventSubgroup(id) {
         });
     }
     return _events.get(id);
-}
-
-
-let _echartsLoading;
-async function importEcharts() {
-    if (!_echartsLoading) {
-        _echartsLoading = Promise.all([
-            import('../deps/src/echarts.mjs'),
-            import('./echarts-sauce-theme.mjs'),
-        ]).then(([ec, theme]) => {
-            ec.registerTheme('sauce', theme.getTheme('dynamic'));
-            addEventListener('resize', resizeCharts);
-            return ec;
-        });
-    }
-    return await _echartsLoading;
-}
-
-
-async function createLineChart(el, sectionId, settings) {
-    const echarts = await importEcharts();
-    const charts = await import('./charts.mjs');
-    const fields = lineChartFields.filter(x => settings[x.id + 'En']);
-    const lineChart = echarts.init(el, 'sauce', {renderer: 'svg'});
-    const visualMapCommon = {
-        show: false,
-        type: 'continuous',
-        hoverLink: false,
-    };
-    const seriesCommon = {
-        type: 'line',
-        animation: false,  // looks better and saves gobs of CPU
-        showSymbol: false,
-        emphasis: {disabled: true},
-        areaStyle: {},
-    };
-    const dataPoints = settings.dataPoints || defaultLineChartLen;
-    const options = {
-        color: fields.map(f => f.color),
-        visualMap: fields.map((f, i) => ({
-            ...visualMapCommon,
-            seriesIndex: i,
-            min: f.domain[0],
-            max: f.domain[1],
-            inRange: {colorAlpha: f.rangeAlpha},
-        })),
-        grid: {top: 0, left: 0, right: 0, bottom: 0},
-        legend: {show: false},
-        tooltip: {
-            className: 'ec-tooltip',
-            trigger: 'axis',
-            axisPointer: {label: {formatter: () => ''}}
-        },
-        xAxis: [{
-            show: false,
-            data: Array.from(new Array(dataPoints)).map((x, i) => i),
-        }],
-        yAxis: fields.map(f => ({
-            show: false,
-            min: x => Math.min(f.domain[0], x.min),
-            max: x => Math.max(f.domain[1], x.max),
-        })),
-        series: fields.map((f, i) => ({
-            ...seriesCommon,
-            id: f.id,
-            name: typeof f.name === 'function' ? f.name() : f.name,
-            z: fields.length - i + 1,
-            yAxisIndex: i,
-            tooltip: {valueFormatter: f.fmt},
-            lineStyle: {color: f.color},
-        })),
-    };
-    lineChart.setOption(options);
-    lineChart._sauceLegend = new charts.SauceLegend({
-        el: el.nextElementSibling,
-        chart: lineChart,
-        hiddenStorageKey: `watching-hidden-graph-p${sectionId}`,
-    });
-    chartRefs.add(new WeakRef(lineChart));
-    return lineChart;
-}
-
-
-function bindLineChart(lineChart, renderer, settings) {
-    const fields = lineChartFields.filter(x => settings[x.id + 'En']);
-    const dataPoints = settings.dataPoints || defaultLineChartLen;
-    let dataCount = 0;
-    let lastRender = 0;
-    let oldSport;
-    renderer.addCallback(data => {
-        const now = Date.now();
-        if (now - lastRender < 900) {
-            return;
-        }
-        lastRender = now;
-        if (data && data.state) {
-            for (const x of fields) {
-                x.points.push(x.get(data));
-                while (x.points.length > dataPoints) {
-                    x.points.shift();
-                }
-            }
-        }
-        lineChart.setOption({
-            xAxis: [{
-                data: [...sauce.data.range(dataPoints)].map(i =>
-                    (dataCount > dataPoints ? dataCount - dataPoints : 0) + i),
-            }],
-            series: fields.map(field => ({
-                data: field.points,
-                name: typeof field.name === 'function' ? field.name() : field.name,
-                markLine: settings.markMax === field.id ? {
-                    symbol: 'none',
-                    data: [{
-                        name: field.markMin ? 'Min' : 'Max',
-                        xAxis: field.points.indexOf(sauce.data[field.markMin ? 'min' : 'max'](field.points)),
-                        label: {
-                            formatter: x => {
-                                const nbsp ='\u00A0';
-                                return [
-                                    ''.padStart(Math.max(0, 5 - x.value), nbsp),
-                                    nbsp, nbsp, // for unit offset
-                                    field.fmt(field.points[x.value]),
-                                    ''.padEnd(Math.max(0, x.value - (dataPoints - 1) + 5), nbsp)
-                                ].join('');
-                            },
-                        },
-                        emphasis: {disabled: true},
-                    }],
-                } : undefined,
-            })),
-        });
-        if (oldSport !== sport) {
-            oldSport = sport;
-            lineChart._sauceLegend.render();
-        }
-    });
-}
-
-
-async function createTimeInZonesVertBars(el, sectionId, settings, renderer) {
-    const echarts = await importEcharts();
-    const chart = echarts.init(el, 'sauce', {renderer: 'svg'});
-    chart.setOption({
-        grid: {top: '5%', left: '5%', right: '4', bottom: '3%', containLabel: true},
-        tooltip: {
-            className: 'ec-tooltip',
-            trigger: 'axis',
-            axisPointer: {type: 'shadow'}
-        },
-        xAxis: {type: 'category'},
-        yAxis: {
-            type: 'value',
-            min: 0,
-            splitNumber: 2,
-            minInterval: 60,
-            axisLabel: {
-                formatter: fmtDur,
-                rotate: 50
-            }
-        },
-        series: [{
-            type: 'bar',
-            barWidth: '90%',
-            tooltip: {valueFormatter: x => fmtDur(x, {long: true})},
-        }],
-    });
-    chartRefs.add(new WeakRef(chart));
-    let colors;
-    let athleteId;
-    let lastRender = 0;
-    renderer.addCallback(data => {
-        const now = Date.now();
-        if (!data || !data.stats || !data.athlete || !data.athlete.ftp || now - lastRender < 900) {
-            return;
-        }
-        lastRender = now;
-        const extraOptions = {};
-        if (data.athleteId !== athleteId) {
-            athleteId = data.athleteId;
-            colors = powerZoneColors(powerZones, c => ({
-                c,
-                g: new echarts.graphic.LinearGradient(0, 0, 1, 1, [
-                    {offset: 0, color: c.toString()},
-                    {offset: 1, color: c.alpha(0.5).toString()}
-                ])
-            }));
-            Object.assign(extraOptions, {xAxis: {data: powerZones.map(x => x.zone)}});
-        }
-        chart.setOption({
-            ...extraOptions,
-            series: [{
-                data: data.stats.power.timeInZones.map(x => ({
-                    value: x.time,
-                    itemStyle: {color: colors[x.zone].g},
-                })),
-            }],
-        });
-    });
-}
-
-
-async function createTimeInZonesHorizBar(el, sectionId, settings, renderer) {
-    const colors = powerZoneColors(powerZones);
-    const normZones = new Set(powerZones.filter(x => !x.overlap).map(x => x.zone));
-    el.innerHTML = '';
-    for (const x of normZones) {
-        const c = colors[x];
-        el.innerHTML += `<div class="zone" data-zone="${x}" style="` +
-            `--theme-zone-color-hue: ${Math.round(c.h * 360)}deg; ` +
-            `--theme-zone-color-sat: ${Math.round(c.s * 100)}%; ` +
-            `--theme-zone-color-light: ${Math.round(c.l * 100)}%; ` +
-            `--theme-zone-color-shade-dir: ${c.l > 0.65 ? -1 : 1}; ` +
-            `"><span>${x}</span><span class="extra"></span></div>`;
-    }
-    let lastRender = 0;
-    renderer.addCallback(data => {
-        const now = Date.now();
-        if (!data || !data.stats || !data.athlete || !data.athlete.ftp || now - lastRender < 900) {
-            return;
-        }
-        lastRender = now;
-        const zones = data.stats.power.timeInZones.filter(x => normZones.has(x.zone));
-        const totalTime = zones.reduce((agg, x) => agg + x.time, 0);
-        for (const x of zones) {
-            const zoneEl = el.querySelector(`[data-zone="${x.zone}"]`);
-            zoneEl.style.flexGrow = Math.round(100 * x.time / totalTime);
-            zoneEl.querySelector('.extra').textContent = H.duration(x.time,
-                {short: true, seperator: ' '});
-        }
-    });
-}
-
-
-async function createTimeInZonesPie(el, sectionId, settings, renderer) {
-    const echarts = await importEcharts();
-    const chart = echarts.init(el, 'sauce', {renderer: 'svg'});
-    chart.setOption({
-        grid: {top: '1', left: '1', right: '1', bottom: '1'},
-        tooltip: {
-            className: 'ec-tooltip'
-        },
-        series: [{
-            type: 'pie',
-            radius: ['30%', '90%'],
-            minShowLabelAngle: 20,
-            label: {
-                show: true,
-                position: 'inner',
-            },
-            tooltip: {
-                valueFormatter: x => fmtDur(x, {long: true})
-            },
-            emphasis: {
-                itemStyle: {
-                    shadowBlur: 10,
-                    shadowOffsetX: 0,
-                    shadowColor: 'rgba(0, 0, 0, 0.5)'
-                }
-            }
-        }],
-    });
-    chartRefs.add(new WeakRef(chart));
-    let colors;
-    let athleteId;
-    let lastRender = 0;
-    let normZones;
-    renderer.addCallback(data => {
-        const now = Date.now();
-        if (!data || !data.stats || !data.athlete || !data.athlete.ftp || now - lastRender < 900) {
-            return;
-        }
-        lastRender = now;
-        if (data.athleteId !== athleteId) {
-            athleteId = data.athleteId;
-            colors = powerZoneColors(powerZones, c => ({
-                c,
-                g: new echarts.graphic.LinearGradient(0, 0, 1, 1, [
-                    {offset: 0, color: c.toString()},
-                    {offset: 1, color: c.alpha(0.6).toString()}
-                ])
-            }));
-            normZones = new Set(powerZones.filter(x => !x.overlap).map(x => x.zone));
-        }
-        chart.setOption({
-            series: [{
-                data: data.stats.power.timeInZones.filter(x => normZones.has(x.zone)).map(x => ({
-                    name: x.zone,
-                    value: x.time,
-                    label: {color: colors[x.zone].c.l > 0.65 ? '#000b' : '#fffb'},
-                    itemStyle: {color: colors[x.zone].g},
-                })),
-            }],
-        });
-    });
-}
-
-
-function powerZoneColors(zones, fn) {
-    const colors = {};
-    for (const [k, v] of Object.entries(common.getPowerZoneColors(zones))) {
-        const c = color.parse(v);
-        colors[k] = fn ? fn(c) : c;
-    }
-    return colors;
-}
-
-
-function resizeCharts() {
-    for (const r of chartRefs) {
-        const c = r.deref();
-        if (!c) {
-            chartRefs.delete(r);
-        } else {
-            c.resize();
-        }
-    }
 }
 
 
@@ -627,7 +254,6 @@ export async function main() {
     const content = document.querySelector('#content');
     const renderers = [];
     let curScreen;
-    powerZones = await common.rpc.getPowerZones(1);
     const layoutTpl = await getTpl('watching-extras-screen-layout');
     let persistentData = settings.screens.some(x => x.sections.some(xx => sectionSpecs[xx.type].alwaysRender));
     for (const [sIndex, screen] of settings.screens.entries()) {
@@ -708,30 +334,6 @@ export async function main() {
                         });
                     }
                 }
-            } else if (baseType === 'chart') {
-                if (section.type === 'line-chart') {
-                    const lineChart = await createLineChart(
-                        sectionEl.querySelector('.chart-holder.ec'),
-                        sectionEl.dataset.sectionId,
-                        settings);
-                    bindLineChart(lineChart, renderer, settings);
-                } else {
-                    console.error("Invalid chart type:", section.type);
-                }
-            } else if (baseType === 'time-in-zones') {
-                if (section.type === 'time-in-zones') {
-                    const el = sectionEl.querySelector('.zones-holder');
-                    const id = sectionEl.dataset.sectionId;
-                    if (settings.style === 'vert-bars') {
-                        await createTimeInZonesVertBars(el, id, settings, renderer);
-                    } else if (settings.style === 'pie') {
-                        await createTimeInZonesPie(el, id, settings, renderer);
-                    } else if (settings.style === 'horiz-bar') {
-                        await createTimeInZonesHorizBar(el, id, settings, renderer);
-                    }
-                } else {
-                    console.error("Invalid time-in-zones type:", section.type);
-                }
             } else {
                 console.error("Invalid base type:", baseType);
             }
@@ -755,7 +357,6 @@ export async function main() {
         curScreen = curScreen.previousElementSibling;
         curScreen.classList.remove('hidden');
         nextBtn.classList.remove('disabled');
-        resizeCharts();
         if (Number(curScreen.dataset.index) === 0) {
             prevBtn.classList.add('disabled');
         }
@@ -768,7 +369,6 @@ export async function main() {
         curScreen = curScreen.nextElementSibling;
         curScreen.classList.remove('hidden');
         prevBtn.classList.remove('disabled');
-        resizeCharts();
         if (settings.screens.length === Number(curScreen.dataset.index) + 1) {
             nextBtn.classList.add('disabled');
         }
