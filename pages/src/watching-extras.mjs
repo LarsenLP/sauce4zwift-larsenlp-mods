@@ -39,9 +39,9 @@ const sectionSpecs = {
 };
 
 const groupSpecs = {
-    power: {
-        title: 'Power',
-        backgroundImage: 'url(/pages/images/fa/bolt-duotone.svg)',
+    custom: {
+        title: 'Custom',
+        backgroundImage: 'url(/pages/images/fa/cog-duotone.svg)',
         fields: [{
             id: 'pwr-avg-wkg',
             value: x => humanWkg(x.stats && x.stats.power.avg, x.athlete),
@@ -54,14 +54,10 @@ const groupSpecs = {
             label: '20m 95%',
             key: '20m<tiny>95%</tiny>',
             unit: 'w/kg',
-        }],
-    },
-    energy: {
-        title: 'Energy',
-        backgroundImage: 'url(/mods/sauce4zwift-larsenlp-mods/pages/images/fa/battery-full-solid.svg)',
-        fields: [{
+        }, {
             id: 'energy-kcal',
-            value: x => H.number(x.state && (x.state.kj / 4.184)),
+            // Divide kJ by 4.184 to convert to kcal. Then assume human metabolic efficiency of 21.4% (like Strava)
+            value: x => H.number(x.state && (x.state.kj / 4.184 / 21.4 * 100)),
             label: 'Energy',
             key: 'Energy<tiny>kcal</tiny>',
             unit: 'kcal',
@@ -417,9 +413,6 @@ export async function main() {
         common.subscribe('athlete/watching', watching => {
             const force = watching.athleteId !== athleteId;
             athleteId = watching.athleteId;
-            sport = watching.state.sport || 'cycling';
-            eventMetric = watching.remainingMetric;
-            eventSubgroup = getEventSubgroup(watching.state.eventSubgroupId);
             for (const x of renderers) {
                 x.setData(watching);
                 if (x.backgroundRender || !x._contentEl.classList.contains('hidden')) {
