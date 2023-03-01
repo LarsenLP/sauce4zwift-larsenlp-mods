@@ -58,7 +58,7 @@ const groupSpecs = {
     },
     energy: {
         title: 'Energy',
-        backgroundImage: 'url(/pages/images/fa/bolt-duotone.svg)',
+        backgroundImage: 'url(/mods/sauce4zwift-larsenlp-mods/pages/images/fa/battery-full-solid.svg)',
         fields: [{
             id: 'energy-kcal',
             value: x => H.number(x.state && (x.state.kj / 4.184)),
