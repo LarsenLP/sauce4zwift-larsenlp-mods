@@ -1,0 +1,24 @@
+{
+    "manifest_version": 1,
+    "name": "LarsenLP mods",
+    "description": "Extra fields in style of existing Currently Watching window (* 20 minutes 95% w/kg power field * Average w/kg power field * Energy in kcal)",
+    "author": "Lars Peter Ilsø Larsen",
+    "website_url": "",
+    "version": "0.0.1",
+    "web_root": "pages",
+    "windows": [{
+        "file": "pages/watching-extras.html",
+        "id": "larsenlp-watching-extras",
+        "name": "LARSENLP MOD - Currently Watching Extras",
+        "description": "Extra fields in style of existing Currently Watching window",
+        "always_visible": true,
+        "overlay": true,
+        "frame": false,
+        "default_bounds": {
+            "width": 500,
+            "height": 500,
+            "x": 0,
+            "y": 0
+        }
+    }]
+}
